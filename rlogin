@@ -1,8 +1,8 @@
-#!/usr/bin/node
+#!/usr/bin/env node
 var net = require('net');
 var fs = require('fs');
 var cp = require('child_process');
-var crypto = require('crypto');
+var passwd = require('passwd-linux');
 var mode = 'username';
 process.stdout.write('Username: ');
 var username = '';
@@ -12,61 +12,38 @@ process.stdin.on('data', function(data) {
     if (mode == 'username') {
         username = data.toString().split('\n')[0];
         if (username) {
-            fs.readFile('/etc/users.json', function(err, data) {
-                if (err) {
-                    console.log('Failed to read user database!');
-                    process.exit(1);
-                }
-                else {
-                    var users = JSON.parse(data);
-                    var found = false;
-                    for (var i = 0; i < users.length; i++) {
-                        if (users[i].username == username) {
-                            found = true;
-                            usernumber = i;
-                            break;
-                        }
-                    }
-                    if (found) {
-                        mode = 'password';
-                        process.stdout.write("Password: ");
-                        process.stdin.setRawMode(true);
-                    }
-                    else {
-                        console.log('User does not exist!');
-                        setTimeout(function() {
-                            process.exit(1);
-                        }, 2000);
-                    }
-                }
-            });
+            mode = 'password';
+            process.stdout.write("Password: ");
+            process.stdin.setRawMode(true);
         }
         else {
             process.stdout.write('Username: ');
         }
     }
-    if (mode == 'password') {
+    else if (mode == 'password') {
         var char = data.toString();
-        if (char == '\r') {
+        //process.stdout.write(char.charCodeAt(0).toString());
+        if (char == '\r' || char == '\n') {
             process.stdin.setRawMode(false);
             process.stdout.write('\n');
             if (password) {
-                fs.readFile('/etc/users.json', function(err, data) {
-                    if (err) {
-                        console.log('Failed to read user database!');
-                        process.exit(1);
-                    }
-                    else {
-                        var users = JSON.parse(data);
-                        var hash = crypto.createHash('sha256');
-                        hash.update(password + users[usernumber].salt);
-                        if (hash.digest().equals(Buffer.from(users[usernumber].password, 'hex'))) {
-                            // finally, the user is authenticated.
+                var parts = username.split('@');
+                if (parts.length == 1) {
+                    parts[1] = 'localhost';
+                }
+                if (parts.length == 2) {
+                    var socket = net.connect(12345, parts[1], function() {
+                        socket.write(JSON.stringify({username: parts[0], password: password}));
+                    });
+                    socket.on('data', function(data) {
+                        var response = JSON.parse(data);
+                        if (response.status == 'correct') {
+                            // user is authenticated
                             var programEnv = process.env;
-                            programEnv.SHELL = users[usernumber].shell;
-                            programEnv.HOME = users[usernumber].home;
-                            programEnv.USER = users[usernumber].username;
-                            var program = cp.spawn(users[usernumber].shell, [], {env: programEnv, cwd: users[usernumber].home, stdio: 'inherit', argv0: '-' + users[usernumber].shell, uid: users[usernumber].uid, gid: users[usernumber].gid});
+                            programEnv.SHELL = response.shell;
+                            programEnv.HOME = response.homedir;
+                            programEnv.USER = response.username;
+                            var program = cp.spawn(response.shell, [], {env: programEnv, cwd: response.homedir, stdio: 'inherit', argv0: '-' + response.shell.split('/')[response.shell.split('/').length - 1], uid: parseInt(response.userId), gid: parseInt(response.groupId)});
                             process.stdin.pause();
                             program.on('error', function() {
                                 process.exit(1);
@@ -75,21 +52,31 @@ process.stdin.on('data', function(data) {
                                 process.exit();
                             });
                         }
-                        else {
-                            console.log('Incorrect Password!');
-                            setTimeout(function() {
-                                process.exit(1);
-                            }, 2000);
+                        if (response.status == 'incorrect') {
+                            console.log('Incorrect password!');
+                            process.exit();
                         }
-                    }
-                });
+                        if (response.status == 'error') {
+                            console.log('Error authenticating!');
+                            process.exit();
+                        }
+                    });
+                    socket.on('error', function(err) {
+                        console.log('Error connecting to auth server:', err);
+                        process.exit(1);
+                    });
+                }
+                else {
+                    console.log('Improperly formatted username!');
+                    process.exit(1);
+                }
             }
             else {
                 process.stdin.setRawMode(true);
                 process.stdout.write('Password: ');
             }
         }
-        else if (char == '\b') {
+        else if (char == '\b' || char == '\x7f') {
             password.pop();
             process.stdout.write('\b');
         }

@@ -1,4 +1,27 @@
 #!/usr/bin/env node
 var net = require('net');
+var passwdLinux = require('passwd-linux');
+var passwd = require('passwd');
 net.createServer(function(socket) {
+    socket.on('data', function(data) {
+        var credentials = JSON.parse(data);
+        console.log('Login attempt:', credentials)
+        passwdLinux.checkPassword(credentials.username, credentials.password, function(err, response) {
+            if (err) {
+                socket.end(JSON.stringify({status: 'error'}));
+                console.log('Error logging in:', err);
+            }
+            else if (response) {
+                passwd.get(credentials.username, function(user) {
+                    user.status = 'correct';
+                    socket.end(JSON.stringify(user));
+                    console.log('Login success!');
+                });
+            }
+            else {
+                socket.end(JSON.stringify({status: 'incorrect'}));
+                console.log('Login failed!');
+            }
+        });
+    });
 }).listen(12345);
